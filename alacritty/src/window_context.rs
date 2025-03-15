@@ -214,6 +214,8 @@ impl WindowContext {
             pty,
             pty_config.drain_on_exit,
             config.debug.ref_test,
+            config.window.minlatency,
+            config.window.maxlatency,
         )?;
 
         // The event loop channel allows write requests from the event processor

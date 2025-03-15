@@ -1,5 +1,6 @@
 //! The main event loop which performs I/O on the pseudoterminal.
 
+use core::time::Duration;
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::{self, Display, Formatter};
@@ -52,6 +53,9 @@ pub struct EventLoop<T: tty::EventedPty, U: EventListener> {
     event_proxy: U,
     drain_on_exit: bool,
     ref_test: bool,
+    minlatency: u64,
+    maxlatency: u64,
+    render_timeout: Option<std::time::Instant>,
 }
 
 impl<T, U> EventLoop<T, U>
@@ -66,6 +70,8 @@ where
         pty: T,
         drain_on_exit: bool,
         ref_test: bool,
+        minlatency: u64,
+        maxlatency: u64,
     ) -> io::Result<EventLoop<T, U>> {
         let (tx, rx) = mpsc::channel();
         let poll = polling::Poller::new()?.into();
@@ -78,6 +84,9 @@ where
             event_proxy,
             drain_on_exit,
             ref_test,
+            render_timeout: None,
+            minlatency,
+            maxlatency
         })
     }
 
@@ -162,6 +171,18 @@ where
             }
         }
 
+        let now = std::time::Instant::now();
+        if self.maxlatency != 0 {
+            if let Some(a) = self.render_timeout.as_mut() {
+                if now < *a {
+                    return Ok(());
+                }
+            } else {
+                self.render_timeout = Some(now + Duration::from_millis(self.maxlatency));
+                return Ok(());
+            }
+        }
+        self.render_timeout = None;
         // Queue terminal redraw unless all processed bytes were synchronized.
         if state.parser.sync_bytes_count() < processed && processed > 0 {
             self.event_proxy.send_event(Event::Wakeup);
@@ -227,8 +248,10 @@ where
             'event_loop: loop {
                 // Wakeup the event loop when a synchronized update timeout was reached.
                 let handler = state.parser.sync_timeout();
-                let timeout =
-                    handler.sync_timeout().map(|st| st.saturating_duration_since(Instant::now()));
+                let timeout = {
+                    let now = Instant::now();
+                    handler.sync_timeout().map(|st| st.saturating_duration_since(now)).max(self.render_timeout.map(|a|std::time::Duration::from_secs_f64(a.saturating_duration_since(now).as_secs_f64()*(self.minlatency as f64/self.maxlatency as f64))))
+                };
 
                 events.clear();
                 if let Err(err) = self.poll.wait(&mut events, timeout) {
@@ -243,6 +266,7 @@ where
 
                 // Handle synchronized update timeout.
                 if events.is_empty() && self.rx.peek().is_none() {
+                    self.render_timeout = None;
                     state.parser.stop_sync(&mut *self.terminal.lock());
                     self.event_proxy.send_event(Event::Wakeup);
                     continue;

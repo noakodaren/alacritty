@@ -64,6 +64,9 @@ pub struct WindowConfig {
 
     /// Window level.
     pub level: WindowLevel,
+
+    pub minlatency: u64,
+    pub maxlatency: u64,
 }
 
 impl Default for WindowConfig {
@@ -84,6 +87,8 @@ impl Default for WindowConfig {
             decorations_theme_variant: Default::default(),
             option_as_alt: Default::default(),
             level: Default::default(),
+            minlatency: 0,
+            maxlatency: 0,
         }
     }
 }
